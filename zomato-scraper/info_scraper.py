@@ -1,7 +1,7 @@
 import json
 import requests
 import pandas as pd
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, FeatureNotFound
 
 headers = {'User-Agent': 'Mozilla/5.0 (Macintosh;'
                          ' Intel Mac OS X 10_15_4)'
@@ -9,24 +9,53 @@ headers = {'User-Agent': 'Mozilla/5.0 (Macintosh;'
                          ' Chrome/83.0.4103.97 Safari/537.36'}
 
 
+def parse_html(text):
+    try:
+        return BeautifulSoup(text, 'lxml')
+    except FeatureNotFound:
+        return BeautifulSoup(text, 'html.parser')
+
+
 def get_info(url):
     """ Get Information about the restaurant from URL """
     
     global headers
     webpage = requests.get(url, headers=headers, timeout=3)
-    html_text = BeautifulSoup(webpage.text, 'lxml')
-    info = html_text.find_all('script', type='application/ld+json')[1]
-    info = json.loads(info.string)
+    html_text = parse_html(webpage.text)
+    scripts = html_text.find_all('script', type='application/ld+json')
+    info = {}
+    for script in scripts:
+        if not script.string:
+            continue
+        try:
+            parsed = json.loads(script.string)
+        except json.JSONDecodeError:
+            continue
+
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, dict) and item.get('@type') == 'Restaurant':
+                    info = item
+                    break
+            if info:
+                break
+        elif isinstance(parsed, dict) and parsed.get('@type') == 'Restaurant':
+            info = parsed
+            break
+
+    address = info.get('address', {})
+    geo = info.get('geo', {})
+    aggregate_rating = info.get('aggregateRating', {})
     
     data = (
-        info['@type'], info['name'], info['url'], info['openingHours'],
-        info['address']['streetAddress'], info['address']['addressLocality'],
-        info['address']['addressRegion'], info['address']['postalCode'],
-        info['address']['addressCountry'], 
-        info['geo']['latitude'], info['geo']['longitude'],
-        info['telephone'], info['priceRange'], info['paymentAccepted'],
-        info['image'], info['servesCuisine'],
-        info['aggregateRating']['ratingValue'], info['aggregateRating']['ratingCount']
+        info.get('@type'), info.get('name'), info.get('url'), info.get('openingHours'),
+        address.get('streetAddress'), address.get('addressLocality'),
+        address.get('addressRegion'), address.get('postalCode'),
+        address.get('addressCountry'),
+        geo.get('latitude'), geo.get('longitude'),
+        info.get('telephone'), info.get('priceRange'), info.get('paymentAccepted'),
+        info.get('image'), info.get('servesCuisine'),
+        aggregate_rating.get('ratingValue'), aggregate_rating.get('ratingCount')
     )
     return data
 

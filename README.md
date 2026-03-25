@@ -21,3 +21,32 @@ This scraped dataset contains many attributes of the restaurant, such as:
 - Create Geographical maps with the most famous cusine in a geo-location.
 - The Menu items can be analysed to find which items are popular and gain insights to help to manage a restaurant.
 - The Review data can be used to build a classification or sentiment-analysis algorithm.
+
+### Interactive top-down scraper (recommended)
+This project now supports an interactive workflow:
+
+1. Discover and print the top N restaurants by rating (default 50)
+2. Choose a rank range (example: `1-10`, `1-5,8,12-15`)
+3. Scrape menu + reviews for only the selected ranks
+4. Optionally scrape another range from the same discovered top list (no rediscovery needed)
+
+Run from repo root:
+
+```bash
+./run.sh bangalore 50 6 50 35
+```
+
+Arguments:
+- `city` (default `bangalore`)
+- `top-count` (default `50`)
+- `concurrency` (default `6`)
+- `max-reviews` (default `50`)
+- `max-scrolls` (default `35`)
+
+Main generated outputs:
+- `zomato-scraper/Top_50_Restaurants.csv`
+- `zomato-scraper/Selected_Restaurants_<timestamp>.csv`
+- `zomato-scraper/Interactive_Run_Summary_<timestamp>.csv`
+- `zomato-scraper/Restaurants.csv`
+- `zomato-scraper/Menu/*.csv`
+- `zomato-scraper/Reviews/*.csv`
