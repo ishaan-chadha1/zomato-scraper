@@ -11,14 +11,12 @@ try:
 except ImportError:
     sync_playwright = None
 
+from playwright_chromium import chromium_launch_kwargs
+
 headers = {'User-Agent': 'Mozilla/5.0 (Macintosh;'
                          ' Intel Mac OS X 10_15_4)'
                          ' AppleWebKit/537.36 (KHTML, like Gecko)'
                          ' Chrome/83.0.4103.97 Safari/537.36'}
-DEFAULT_PLAYWRIGHT_EXECUTABLE = (
-    "/Users/Ishaan/Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/"
-    "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
-)
 
 
 def parse_html(text):
@@ -209,17 +207,10 @@ def _get_menu_via_playwright(url, executable_path=None):
         return None, None, "playwright_not_installed"
 
     fallback_name = _restaurant_name_from_url(url)
-    exe = executable_path or DEFAULT_PLAYWRIGHT_EXECUTABLE
-    if not os.path.exists(exe):
-        return None, fallback_name, f"missing_browser_executable:{exe}"
 
     target = url if url.endswith("/order") else f"{url}/order"
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            executable_path=exe,
-            args=['--disable-http2', '--disable-blink-features=AutomationControlled']
-        )
+        browser = p.chromium.launch(**chromium_launch_kwargs(executable_path))
         page = browser.new_page(
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -238,11 +229,15 @@ def _get_menu_via_playwright(url, executable_path=None):
         except Exception:
             pass
 
-        # Retry navigation once to reduce transient failures.
+        print("[menu] Navigating to /order (same as browser; can take 30–120s)…", flush=True)
         last_exc = None
         for attempt in range(2):
             try:
-                page.goto(target, wait_until='domcontentloaded', timeout=90000)
+                page.goto(target, wait_until="commit", timeout=120000)
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=45000)
+                except Exception:
+                    pass
                 last_exc = None
                 break
             except Exception as exc:

@@ -4,24 +4,24 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 
 import pandas as pd
 import requests
 
-from info_scraper import get_info
+from info_scraper import get_info, parse_html
 from menu_scraper import get_menu
+from review_scraper import get_reviews
 
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    sync_playwright = None
-
-
-DEFAULT_PLAYWRIGHT_EXECUTABLE = (
-    "/Users/Ishaan/Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/"
-    "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
-)
+# Same style as review_scraper: plain HTTP + parse (no browser for listing pages).
+LISTING_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-IN,en;q=0.9",
+}
 
 INFO_COLUMNS = [
     'Type', 'Name', 'URL', 'Opening_Hours',
@@ -73,76 +73,78 @@ def normalize_restaurant_url(url, city):
 
 
 def discover_restaurants(city, max_restaurants=50, max_scrolls=35, executable_path=None):
-    if sync_playwright is None:
-        raise RuntimeError("Playwright is not installed. Install it via pip.")
+    """
+    Discover venues like review_scraper: requests.get + BeautifulSoup on listing HTML.
+    No Playwright (avoids timeouts / bot wall on listing navigation).
 
-    exe = executable_path or DEFAULT_PLAYWRIGHT_EXECUTABLE
-    if not os.path.exists(exe):
-        raise RuntimeError(f"Playwright browser not found at: {exe}")
+    max_scrolls: reused as "max listing pages to fetch per source URL" (pagination).
+    executable_path: ignored; kept for call compatibility.
+    """
+    del executable_path
+    session = requests.Session()
+    session.headers.update(LISTING_HTTP_HEADERS)
 
-    pages = [
-        f"https://www.zomato.com/{city}/delivery?sort=rating",
-        f"https://www.zomato.com/{city}/restaurants?sort=rating",
-        f"https://www.zomato.com/{city}/dine-out?sort=rating",
+    sources = [
+        f"https://www.zomato.com/{city}/delivery",
+        f"https://www.zomato.com/{city}/restaurants",
+        f"https://www.zomato.com/{city}/dine-out",
     ]
     discovered = {}
 
-    eval_script = """
-    () => {
-      const out = [];
-      const anchors = Array.from(document.querySelectorAll('a[href]'));
-      for (const a of anchors) {
-        const href = a.getAttribute('href') || '';
-        const name = (a.textContent || '').trim().replace(/\\s+/g, ' ');
-        if (!href || !name) continue;
-        const card = a.closest('article,section,div');
-        const cardText = card ? (card.textContent || '').replace(/\\s+/g, ' ') : '';
-        out.push({ href, name, cardText });
-      }
-      return out;
-    }
-    """
+    for base in sources:
+        for page_num in range(1, max_scrolls + 1):
+            url = f"{base}?{urlencode({'sort': 'rating', 'page': page_num})}"
+            try:
+                resp = session.get(url, timeout=40)
+            except requests.RequestException:
+                break
+            if resp.status_code != 200:
+                break
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            executable_path=exe,
-            args=['--disable-http2', '--disable-blink-features=AutomationControlled']
-        )
-        for page_url in pages:
-            page = browser.new_page(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-                ),
-                viewport={'width': 1440, 'height': 2200}
-            )
-            page.goto(page_url, wait_until='domcontentloaded', timeout=90000)
-            page.wait_for_timeout(2500)
-
-            for _ in range(max_scrolls):
-                page.mouse.wheel(0, 2400)
-                page.wait_for_timeout(450)
-
-            for item in page.evaluate(eval_script):
-                normalized_url = normalize_restaurant_url(item.get("href"), city)
+            soup = parse_html(resp.text)
+            count_before = len(discovered)
+            for a in soup.find_all("a", href=True):
+                href = a.get("href", "")
+                name = re.sub(
+                    r"\s+",
+                    " ",
+                    (a.get_text(separator=" ", strip=True) or "").strip(),
+                )
+                if not href or not name or len(name) > 120:
+                    continue
+                card = a.find_parent(["article", "section", "div"])
+                card_text = ""
+                if card:
+                    card_text = re.sub(r"\s+", " ", card.get_text(" ", strip=True))
+                normalized_url = normalize_restaurant_url(href, city)
                 if not normalized_url:
                     continue
-                rating = parse_rating(item.get("cardText", ""))
+                rating = parse_rating(card_text)
                 existing = discovered.get(normalized_url)
                 if existing is None or (rating or 0) > (existing.get("rating") or 0):
                     discovered[normalized_url] = {
                         "url": normalized_url,
-                        "name": item.get("name", "").strip(),
+                        "name": name,
                         "rating": rating,
-                        "source_page": page_url,
+                        "source_page": url,
                     }
                 if len(discovered) >= max_restaurants:
                     break
-            page.close()
+
             if len(discovered) >= max_restaurants:
                 break
-        browser.close()
+            if page_num > 1 and len(discovered) == count_before:
+                break
+            time.sleep(0.35)
+
+        if len(discovered) >= max_restaurants:
+            break
+
+    if not discovered:
+        raise RuntimeError(
+            "No restaurants found on listing pages (HTTP). "
+            "Check network, or open the city URL in a browser — Zomato may require a different region."
+        )
 
     restaurants = list(discovered.values())
     restaurants.sort(key=lambda x: (x.get("rating") is not None, x.get("rating") or 0), reverse=True)
@@ -186,24 +188,28 @@ def print_top_list(restaurants):
     print("-" * 110)
 
 
-def parse_selection(selection_text, max_rank):
-    selected = set()
-    chunks = [x.strip() for x in selection_text.split(",") if x.strip()]
-    for chunk in chunks:
-        if "-" in chunk:
-            left, right = chunk.split("-", 1)
-            start = int(left)
-            end = int(right)
-            if start > end:
-                start, end = end, start
-            for rank in range(start, end + 1):
-                if 1 <= rank <= max_rank:
-                    selected.add(rank)
-        else:
-            rank = int(chunk)
-            if 1 <= rank <= max_rank:
-                selected.add(rank)
-    return sorted(selected)
+def ask_three_ranks(max_rank):
+    """Prompt until the user enters exactly three distinct valid ranks."""
+    while True:
+        raw = input(
+            "Enter exactly 3 ranks from the list above (e.g. 2, 15, 40): "
+        ).strip()
+        normalized = raw.replace(",", " ")
+        parts = [p for p in normalized.split() if p]
+        try:
+            ranks = [int(p) for p in parts]
+        except ValueError:
+            print("Use only whole numbers separated by commas or spaces.")
+            continue
+        ranks = sorted(set(ranks))
+        if len(ranks) != 3:
+            print(f"You must pick exactly 3 different ranks (you entered {len(ranks)}).")
+            continue
+        invalid = [r for r in ranks if r < 1 or r > max_rank]
+        if invalid:
+            print(f"Each rank must be between 1 and {max_rank}. Invalid: {invalid}")
+            continue
+        return ranks
 
 
 def ask_yes_no(prompt, default="y"):
@@ -241,25 +247,42 @@ def run_with_retries(fn, attempts=3, base_sleep=1.5):
     raise RuntimeError("retry loop failed without exception")
 
 
-def scrape_one_restaurant(url):
+def scrape_one_restaurant(url, log_label=None):
     started = time.time()
+
+    def log(msg):
+        prefix = f"[interactive] {log_label}" if log_label else "[interactive]"
+        print(f"{prefix} | {msg}", flush=True)
+
     result = {
         "url": url,
         "status": "ok",
         "error": "",
         "menu_rows": 0,
+        "review_rows": 0,
         "elapsed_sec": 0.0,
         "info": None,
         "menu_df": None,
+        "review_df": None,
     }
+    log(
+        "starting: info → menu → all reviews. "
+        "Do not assume a hang; menu can take ~1–2 min, reviews often 5–30+ min per place."
+    )
     try:
+        log("info: fetching…")
         info = run_with_retries(lambda: get_info(url), attempts=3, base_sleep=1.5)
         result["info"] = info
+        log("info: done")
     except Exception as exc:
         result["status"] = "failed"
         result["error"] = f"info_error: {exc}"
+        log(f"info: failed ({exc})")
 
     try:
+        log(
+            "menu: Playwright opening /order (often 30–120s; on failure we fall back to static HTML)…"
+        )
         menu_df = run_with_retries(
             lambda: get_menu(url=url, save=False, use_playwright=True),
             attempts=2,
@@ -267,33 +290,80 @@ def scrape_one_restaurant(url):
         )
         result["menu_rows"] = len(menu_df)
         result["menu_df"] = menu_df
+        log(f"menu: done ({result['menu_rows']} rows)")
     except Exception as exc:
         if result["status"] == "ok":
             result["status"] = "partial_failed"
             result["error"] = f"menu_error: {exc}"
         else:
             result["error"] = f"{result['error']} | menu_error: {exc}"
+        log(f"menu: failed ({exc})")
 
-    if result["status"] == "partial_failed" and result["menu_rows"] > 0:
+    try:
+        log(
+            "reviews: paging /reviews (slowest step). "
+            "Watch [reviews] filter=… lines until this rank finishes."
+        )
+        review_df = run_with_retries(
+            lambda: get_reviews(
+                url,
+                max_reviews=None,
+                sort="popular",
+                save=True,
+                save_empty=False,
+                progress_log=bool(log_label),
+            ),
+            attempts=2,
+            base_sleep=3.0,
+        )
+        result["review_df"] = review_df
+        result["review_rows"] = len(review_df)
+        log(f"reviews: done ({result['review_rows']} rows)")
+    except Exception as exc:
+        if result["status"] == "ok":
+            result["status"] = "partial_failed"
+            result["error"] = f"review_error: {exc}"
+        else:
+            result["error"] = f"{result['error']} | review_error: {exc}"
+        log(f"reviews: failed ({exc})")
+
+    if result["status"] == "partial_failed" and (
+        result["menu_rows"] > 0 or result["review_rows"] > 0
+    ):
         result["status"] = "ok"
         result["error"] = ""
+
     result["elapsed_sec"] = round(time.time() - started, 2)
+    log(f"finished this place in {result['elapsed_sec']}s (status={result['status']})")
     return result
 
 
 def scrape_selected(restaurants, selected_ranks, concurrency):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     selected_rows = [r for r in restaurants if r["rank"] in selected_ranks]
-    print(f"[interactive] scraping {len(selected_rows)} selected restaurants...")
+    workers = min(concurrency, max(1, len(selected_rows)))
+    print(
+        "[interactive] Scraping selected restaurants. Order per place: info (fast) → "
+        "menu (browser) → all reviews (many pages).",
+        flush=True,
+    )
+    print(
+        f"[interactive] {len(selected_rows)} job(s); up to {workers} in parallel — "
+        "each block below is one place; wait for 'finished this place'.",
+        flush=True,
+    )
+    print(f"[interactive] scraping {len(selected_rows)} selected restaurants…\n", flush=True)
 
     summary_rows = []
     info_rows = []
     menu_frames = []
-    with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        future_map = {
-            pool.submit(scrape_one_restaurant, row["url"]): row
-            for row in selected_rows
-        }
+    review_frames = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_map = {}
+        for row in selected_rows:
+            label = f"rank={row['rank']} {row['name'][:50]}"
+            fut = pool.submit(scrape_one_restaurant, row["url"], label)
+            future_map[fut] = row
         completed = 0
         total = len(future_map)
         for future in as_completed(future_map):
@@ -310,6 +380,7 @@ def scrape_selected(restaurants, selected_ranks, concurrency):
                     "review_rows": 0,
                     "elapsed_sec": 0.0,
                     "info": None,
+                    "review_df": None,
                 }
 
             summary_rows.append({
@@ -320,6 +391,7 @@ def scrape_selected(restaurants, selected_ranks, concurrency):
                 "status": outcome["status"],
                 "error": outcome["error"],
                 "menu_rows": outcome["menu_rows"],
+                "review_rows": outcome.get("review_rows", 0),
                 "elapsed_sec": outcome["elapsed_sec"],
             })
             if outcome.get("info"):
@@ -332,9 +404,19 @@ def scrape_selected(restaurants, selected_ranks, concurrency):
                 df.insert(3, "Restaurant_Rating", meta.get("rating"))
                 menu_frames.append(df)
 
+            rev_df = outcome.get("review_df")
+            if rev_df is not None and not rev_df.empty:
+                df = rev_df.copy()
+                df.insert(0, "Restaurant_Rank", meta["rank"])
+                df.insert(1, "Restaurant_Name", meta["name"])
+                df.insert(2, "Restaurant_URL", meta["url"])
+                df.insert(3, "Restaurant_Rating", meta.get("rating"))
+                review_frames.append(df)
+
             print(
                 f"[interactive] {completed}/{total} rank={meta['rank']} "
                 f"menu={outcome['menu_rows']} "
+                f"reviews={outcome.get('review_rows', 0)} "
                 f"status={outcome['status']} | {meta['name']}"
             )
 
@@ -361,6 +443,13 @@ def scrape_selected(restaurants, selected_ranks, concurrency):
         combined.to_csv("Menus_Combined.csv", index=False)
         print(f"[interactive] wrote {combined_path} and Menus_Combined.csv ({len(combined)} rows)")
 
+    if review_frames:
+        combined_rev = pd.concat(review_frames, ignore_index=True)
+        rev_path = f"Reviews_Combined_{ts}.csv"
+        combined_rev.to_csv(rev_path, index=False)
+        combined_rev.to_csv("Reviews_Combined.csv", index=False)
+        print(f"[interactive] wrote {rev_path} and Reviews_Combined.csv ({len(combined_rev)} rows)")
+
     summary_df = pd.DataFrame(summary_rows).sort_values(by="rank")
     summary_df.to_csv(f"Interactive_Run_Summary_{ts}.csv", index=False)
     print(f"[interactive] wrote Interactive_Run_Summary_{ts}.csv")
@@ -384,25 +473,16 @@ def run_interactive(city, top_count, concurrency, max_scrolls):
     print_top_list(restaurants)
 
     while True:
-        while True:
-            raw = input("Enter rank selection (examples: 1-10 or 1-5,8,12-15): ").strip()
-            try:
-                selected_ranks = parse_selection(raw, len(restaurants))
-                if not selected_ranks:
-                    raise ValueError("No valid ranks selected")
-                break
-            except Exception:
-                print("Invalid selection format. Try again.")
-
+        selected_ranks = ask_three_ranks(len(restaurants))
         print(f"[interactive] selected ranks: {selected_ranks}")
-        if not ask_yes_no("Proceed with scraping these ranks?", default="y"):
-            if ask_yes_no("Do you want to choose another range?", default="y"):
+        if not ask_yes_no("Proceed with scraping these 3 (info, menu, all reviews)?", default="y"):
+            if ask_yes_no("Choose three different ranks instead?", default="y"):
                 continue
             print("[interactive] exiting without scraping.")
             break
 
         scrape_selected(restaurants, selected_ranks, concurrency)
-        if not ask_yes_no("Scrape another range from the same top list?", default="n"):
+        if not ask_yes_no("Scrape another set of 3 from the same top list?", default="n"):
             print("[interactive] done.")
             break
         print("[interactive] reusing the same discovered top list.")
