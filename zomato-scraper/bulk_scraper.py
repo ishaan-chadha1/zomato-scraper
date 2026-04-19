@@ -66,6 +66,8 @@ def is_junk_listing_anchor_name(name: str) -> bool:
         return True
     if re.match(r"^flat\s+\d+", low):
         return True
+    if "star-fill" in low:
+        return True
     return False
 
 
@@ -108,6 +110,8 @@ def normalize_restaurant_url(url, city):
     if slug_l in _COLLECTION_AND_HUB_SLUGS:
         return None
     if slug_l.startswith("dine-out-in-"):
+        return None
+    if slug_l.endswith("-restaurants"):
         return None
     return absolute
 
