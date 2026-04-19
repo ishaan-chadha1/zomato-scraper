@@ -33,6 +33,41 @@ INFO_COLUMNS = [
 
 BASE_URL = "https://www.zomato.com"
 
+# Curated / hub listing slugs (not single-venue pages).
+_COLLECTION_AND_HUB_SLUGS = frozenset(
+    {
+        "newly-opened",
+        "omakase-bars",
+        "picturesque-cafes-insta-worthy",
+        "fine-dining-restaurants",
+        "iconic-restaurants",
+        "great-breakfasts",
+        "best-bars-and-pubs",
+        "finest-microbreweries",
+        "collections",
+        "central-bangalore-restaurants",
+    }
+)
+
+
+def is_junk_listing_anchor_name(name: str) -> bool:
+    """True for promo tiles, 'N Places' collection cards, etc. (link text on listing HTML)."""
+    n = (name or "").strip()
+    if not n or len(n) > 120:
+        return True
+    low = n.lower()
+    if "right-triangle" in low:
+        return True
+    if re.search(r"\d+\s+places\b", low):
+        return True
+    if "% off" in low and len(n) < 60:
+        return True
+    if low.startswith("promoted ") and ("%" in n or " off" in low):
+        return True
+    if re.match(r"^flat\s+\d+", low):
+        return True
+    return False
+
 
 def parse_rating(text):
     if not text:
@@ -66,41 +101,54 @@ def normalize_restaurant_url(url, city):
     if any(token in absolute for token in blocked):
         return None
 
-    last_segment = absolute.rsplit("/", 1)[-1]
+    last_segment = (absolute.rsplit("/", 1)[-1] or "").split("?")[0]
     if len(last_segment.split("-")) < 2:
+        return None
+    slug_l = last_segment.lower()
+    if slug_l in _COLLECTION_AND_HUB_SLUGS:
+        return None
+    if slug_l.startswith("dine-out-in-"):
         return None
     return absolute
 
 
-def discover_restaurants(city, max_restaurants=50, max_scrolls=35, executable_path=None):
+def discover_restaurants_from_seeds(
+    city,
+    seeds,
+    max_restaurants=50,
+    max_scrolls=35,
+    *,
+    listing_pages_without_growth_limit: int = 1,
+    request_timeout_sec: float = 40.0,
+    listing_sleep_sec: float = 0.35,
+) -> list[dict]:
     """
-    Discover venues like review_scraper: requests.get + BeautifulSoup on listing HTML.
-    No Playwright (avoids timeouts / bot wall on listing navigation).
+    Paginate each seed URL (?sort=rating&page=N) and merge unique venue URLs.
 
-    max_scrolls: reused as "max listing pages to fetch per source URL" (pagination).
-    executable_path: ignored; kept for call compatibility.
+    `seeds` are full https://www.zomato.com/{city}/... listing pages (area, dine-out, etc.).
     """
-    del executable_path
     session = requests.Session()
     session.headers.update(LISTING_HTTP_HEADERS)
+    discovered: dict[str, dict] = {}
 
-    sources = [
-        f"https://www.zomato.com/{city}/delivery",
-        f"https://www.zomato.com/{city}/restaurants",
-        f"https://www.zomato.com/{city}/dine-out",
-    ]
-    discovered = {}
-
-    for base in sources:
+    for seed in seeds:
+        seed = seed.strip()
+        if not seed:
+            continue
+        stale_pages = 0
         for page_num in range(1, max_scrolls + 1):
-            url = f"{base}?{urlencode({'sort': 'rating', 'page': page_num})}"
             try:
-                resp = session.get(url, timeout=40)
+                resp = session.get(
+                    seed,
+                    params={"sort": "rating", "page": page_num},
+                    timeout=request_timeout_sec,
+                )
             except requests.RequestException:
                 break
             if resp.status_code != 200:
                 break
 
+            listing_page_url = resp.url
             soup = parse_html(resp.text)
             count_before = len(discovered)
             for a in soup.find_all("a", href=True):
@@ -110,7 +158,9 @@ def discover_restaurants(city, max_restaurants=50, max_scrolls=35, executable_pa
                     " ",
                     (a.get_text(separator=" ", strip=True) or "").strip(),
                 )
-                if not href or not name or len(name) > 120:
+                if not href or not name:
+                    continue
+                if is_junk_listing_anchor_name(name):
                     continue
                 card = a.find_parent(["article", "section", "div"])
                 card_text = ""
@@ -126,7 +176,7 @@ def discover_restaurants(city, max_restaurants=50, max_scrolls=35, executable_pa
                         "url": normalized_url,
                         "name": name,
                         "rating": rating,
-                        "source_page": url,
+                        "source_page": listing_page_url,
                     }
                 if len(discovered) >= max_restaurants:
                     break
@@ -134,8 +184,13 @@ def discover_restaurants(city, max_restaurants=50, max_scrolls=35, executable_pa
             if len(discovered) >= max_restaurants:
                 break
             if page_num > 1 and len(discovered) == count_before:
-                break
-            time.sleep(0.35)
+                stale_pages += 1
+                if stale_pages >= listing_pages_without_growth_limit:
+                    break
+            else:
+                stale_pages = 0
+            if listing_sleep_sec:
+                time.sleep(listing_sleep_sec)
 
         if len(discovered) >= max_restaurants:
             break
@@ -151,6 +206,63 @@ def discover_restaurants(city, max_restaurants=50, max_scrolls=35, executable_pa
     for idx, row in enumerate(restaurants, start=1):
         row["rank"] = idx
     return restaurants[:max_restaurants]
+
+
+def discover_restaurants(
+    city,
+    max_restaurants=50,
+    max_scrolls=35,
+    executable_path=None,
+    *,
+    listing_pages_without_growth_limit: int = 1,
+):
+    """
+    Discover venues like review_scraper: requests.get + BeautifulSoup on listing HTML.
+    No Playwright (avoids timeouts / bot wall on listing navigation).
+
+    max_scrolls: reused as "max listing pages to fetch per source URL" (pagination).
+    executable_path: ignored; kept for call compatibility.
+    listing_pages_without_growth_limit: stop this listing source after this many
+        consecutive listing pages that add no new venue URLs (1 matches legacy behavior).
+    """
+    del executable_path
+    seeds = [
+        f"https://www.zomato.com/{city}/delivery",
+        f"https://www.zomato.com/{city}/restaurants",
+        f"https://www.zomato.com/{city}/dine-out",
+    ]
+    return discover_restaurants_from_seeds(
+        city,
+        seeds,
+        max_restaurants=max_restaurants,
+        max_scrolls=max_scrolls,
+        listing_pages_without_growth_limit=listing_pages_without_growth_limit,
+    )
+
+
+def collection_subpage_seeds_from_collections_index_html(html: str, city: str) -> list[str]:
+    """
+    From /{city}/collections HTML, find links to curated listing hubs (great-breakfasts, etc.)
+    and regional dine-out hubs. These are paginated like other listing pages.
+    """
+    from urllib.parse import urlparse
+
+    soup = parse_html(html)
+    found: set[str] = set()
+    city_l = city.lower()
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        full = urljoin(BASE_URL, href).split("?")[0].rstrip("/")
+        path = urlparse(full).path.strip("/")
+        parts = path.split("/")
+        if len(parts) != 2 or parts[0].lower() != city_l:
+            continue
+        slug = parts[1].lower()
+        if slug == "collections":
+            continue
+        if slug in _COLLECTION_AND_HUB_SLUGS or slug.startswith("dine-out-in-"):
+            found.add(f"https://www.zomato.com/{city_l}/{slug}")
+    return sorted(found)
 
 
 def format_rating(value):
