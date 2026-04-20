@@ -4,7 +4,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from urllib.parse import urlencode, urljoin
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 import pandas as pd
 import requests
@@ -32,6 +32,11 @@ INFO_COLUMNS = [
 ]
 
 BASE_URL = "https://www.zomato.com"
+
+# Trailing path segments on ``/{city}/{venue-slug}/…`` (not part of the slug).
+_VENUE_TAB_SEGMENTS = frozenset(
+    {"info", "menu", "reviews", "photos", "book", "order", "events", "live"}
+)
 
 # Curated / hub listing slugs (not single-venue pages).
 _COLLECTION_AND_HUB_SLUGS = frozenset(
@@ -95,6 +100,35 @@ def normalize_restaurant_url(url, city):
     if f"/{city}/" not in absolute:
         return None
 
+    # Listing cards often link as /{city}/restaurants/{venue-slug}. Canonical venue URL is /{city}/{slug}.
+    city_l = city.lower()
+    p = urlparse(absolute)
+    segs = [s for s in p.path.split("/") if s]
+    if (
+        len(segs) == 3
+        and segs[0].lower() == city_l
+        and segs[1].lower() == "restaurants"
+        and segs[2]
+    ):
+        slug_only = segs[2]
+        absolute = urlunparse((p.scheme, p.netloc, f"/{city_l}/{slug_only}", "", "", ""))
+
+    # Cards often link to ``…/{slug}/info`` (status bar / "Copy link address"). Canonicalize to ``…/{slug}``.
+    while True:
+        p2 = urlparse(absolute)
+        segs2 = [s for s in p2.path.split("/") if s]
+        if (
+            len(segs2) >= 3
+            and segs2[0].lower() == city_l
+            and segs2[-1].lower() in _VENUE_TAB_SEGMENTS
+        ):
+            trimmed = segs2[:-1]
+            absolute = urlunparse(
+                (p2.scheme, p2.netloc, "/" + "/".join(trimmed), "", "", "")
+            )
+            continue
+        break
+
     blocked = [
         "/reviews", "/photos", "/menu", "/collections", "/delivery-in-",
         "/delivery/", "/restaurants", "/dish-", "/nearby", "/book",
@@ -104,7 +138,9 @@ def normalize_restaurant_url(url, city):
         return None
 
     last_segment = (absolute.rsplit("/", 1)[-1] or "").split("?")[0]
-    if len(last_segment.split("-")) < 2:
+    # Cuisine / filter hubs are usually two token slugs (``north-indian``, ``fast-food``).
+    # Real venue URLs almost always have three or more hyphen segments (name + locality, etc.).
+    if len(last_segment.split("-")) < 3:
         return None
     slug_l = last_segment.lower()
     if slug_l in _COLLECTION_AND_HUB_SLUGS:
@@ -114,6 +150,23 @@ def normalize_restaurant_url(url, city):
     if slug_l.endswith("-restaurants"):
         return None
     return absolute
+
+
+def _listing_url_for_page(seed: str, page_num: int) -> str:
+    """
+    Build a paginated listing URL while preserving the seed's query string.
+
+    Zomato listing seeds may include sort/mode (e.g. sort=cd&category=2). Older
+    code always forced sort=rating, which overwrote those modes when merged
+    into the request.
+    """
+    p = urlparse((seed or "").strip())
+    qs = parse_qs(p.query, keep_blank_values=True)
+    if "sort" not in qs:
+        qs["sort"] = ["rating"]
+    qs["page"] = [str(page_num)]
+    new_query = urlencode(qs, doseq=True)
+    return urlunparse((p.scheme, p.netloc, p.path, p.params, new_query, p.fragment))
 
 
 def discover_restaurants_from_seeds(
@@ -142,9 +195,9 @@ def discover_restaurants_from_seeds(
         stale_pages = 0
         for page_num in range(1, max_scrolls + 1):
             try:
+                listing_target = _listing_url_for_page(seed, page_num)
                 resp = session.get(
-                    seed,
-                    params={"sort": "rating", "page": page_num},
+                    listing_target,
                     timeout=request_timeout_sec,
                 )
             except requests.RequestException:
