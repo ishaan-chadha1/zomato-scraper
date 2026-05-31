@@ -22,6 +22,7 @@ from extraction.schema import ReviewExtraction  # noqa: E402
 def legal_sections() -> dict[str, set[str]]:
     out: dict[str, set[str]] = {}
     for sname, fi in ReviewExtraction.model_fields.items():
+        out.setdefault(sname, set())
         ann = fi.annotation
         args = getattr(ann, "__args__", ())
         for a in args:
@@ -257,24 +258,37 @@ def pick_showcase(v2_records):
 
 
 def main():
+    import argparse
+
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--baseline", default="v2.1", help="Baseline run label")
+    p.add_argument("--current", default="v2.2", help="Current run label")
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=ROOT / "data/llm_cache/sample/canvas_data.json",
+    )
+    args = p.parse_args()
+
     legal = legal_sections()
-    v1 = load_run(ROOT / "data/llm_cache/sample/v1/sample_combined.json")
-    v2 = load_run(ROOT / "data/llm_cache/sample/v2/sample_combined.json")
+    baseline = load_run(ROOT / f"data/llm_cache/sample/{args.baseline}/sample_combined.json")
+    current = load_run(ROOT / f"data/llm_cache/sample/{args.current}/sample_combined.json")
 
-    v1_summary = summarize_run(v1, legal)
-    v2_summary = summarize_run(v2, legal)
-    showcase = pick_showcase(v2)
+    baseline_summary = summarize_run(baseline, legal)
+    current_summary = summarize_run(current, legal)
+    showcase = pick_showcase(current)
 
-    # Project full-corpus cost (using v2 per-review average + batch + caching estimate)
     n_reviews_total = 2_955_778
-    v2_per_review = v2_summary["total_cost_usd"] / max(v2_summary["total"], 1)
-    full_sync = round(v2_per_review * n_reviews_total, 0)
+    per_review = current_summary["total_cost_usd"] / max(current_summary["total"], 1)
+    full_sync = round(per_review * n_reviews_total, 0)
     full_batch = round(full_sync * 0.5, 0)
-    full_batch_cached = round(full_sync * 0.25, 0)  # rough heuristic with context cache
+    full_batch_cached = round(full_sync * 0.25, 0)
 
     out = {
-        "v1": v1_summary,
-        "v2": v2_summary,
+        "baseline_label": args.baseline,
+        "current_label": args.current,
+        "v1": baseline_summary,
+        "v2": current_summary,
         "showcase": showcase,
         "n_reviews_total_corpus": n_reviews_total,
         "projection_sync_usd": full_sync,
@@ -282,15 +296,14 @@ def main():
         "projection_batch_cached_usd": full_batch_cached,
     }
 
-    out_path = ROOT / "data/llm_cache/sample/canvas_data.json"
-    with open(out_path, "w") as f:
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with open(args.out, "w") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
-    print(f"Wrote {out_path}")
-    print(json.dumps({"v1": v1_summary, "v2": v2_summary,
-                      "n_showcase": len(showcase),
-                      "projection_sync_usd": full_sync,
-                      "projection_batch_usd": full_batch,
-                      "projection_batch_cached_usd": full_batch_cached}, indent=2))
+    print(f"Wrote {args.out}")
+    print(
+        f"  {args.baseline} warn={baseline_summary['warning_rate_pct']}%  "
+        f"{args.current} warn={current_summary['warning_rate_pct']}%"
+    )
 
 
 if __name__ == "__main__":

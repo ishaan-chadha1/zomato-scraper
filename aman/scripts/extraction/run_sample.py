@@ -27,8 +27,12 @@ from google.genai import types
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from extraction.effort_signal import classify_review_effort
+from extraction.normalize import normalize_extraction
 from extraction.prompt import SYSTEM_INSTRUCTION, build_user_prompt
 from extraction.schema import ReviewExtraction
+from extraction.tiers import SCHEMA_VERSION
+from extraction.triggers import cross_dish_consistency_trigger, scan_triggers
 
 
 def select_samples(df: pd.DataFrame, n: int, seed: int = 42) -> pd.DataFrame:
@@ -92,6 +96,8 @@ def extract_one(
     review_text: str,
     rating: float | None,
     restaurant: str,
+    t2_triggers: list[str],
+    review_effort_signal: str,
     max_retries: int = 3,
 ) -> tuple[dict, int, int, list[str]]:
     """Single sync extraction call with retry on 503 / transient errors.
@@ -99,7 +105,13 @@ def extract_one(
     Returns (parsed_dict, input_tokens, output_tokens, validation_warnings).
     """
 
-    user_msg = build_user_prompt(review_text, rating, restaurant)
+    user_msg = build_user_prompt(
+        review_text,
+        rating,
+        restaurant,
+        t2_triggers=t2_triggers,
+        review_effort_signal=review_effort_signal,
+    )
 
     last_err: Exception | None = None
     response = None
@@ -137,6 +149,13 @@ def extract_one(
 
     warnings: list[str] = []
     if parsed and "_parse_error" not in parsed:
+        parsed = normalize_extraction(parsed, t2_triggers)
+        # Merge Python pre-processing (authoritative for effort + triggers)
+        parsed.setdefault("schema_version", SCHEMA_VERSION)
+        parsed["t2_triggers_fired"] = t2_triggers
+        rs = parsed.setdefault("reviewer_signal", {})
+        if isinstance(rs, dict):
+            rs["review_effort_signal"] = review_effort_signal
         try:
             ReviewExtraction.model_validate(parsed)
         except Exception as e:
@@ -213,12 +232,20 @@ def main() -> int:
             flush=True,
         )
 
+        effort = classify_review_effort(desc)
+        extra_t2: list[str] = []
+        if cross_dish_consistency_trigger(desc):
+            extra_t2.append("cross_dish_consistency_signal")
+        t2 = scan_triggers(desc, extra_fields=extra_t2)
+
         try:
             extracted, in_tok, out_tok, warnings = extract_one(
                 client,
                 review_text=desc,
                 rating=float(rating) if rating is not None else None,
                 restaurant=restaurant,
+                t2_triggers=t2,
+                review_effort_signal=effort,
             )
         except Exception as e:
             print(f"      !! error: {e}")
@@ -240,6 +267,8 @@ def main() -> int:
             "source": row["source"],
             "description_len": len(desc),
             "description": desc,
+            "review_effort_signal": effort,
+            "t2_triggers_fired": t2,
             "input_tokens": in_tok,
             "output_tokens": out_tok,
             "validation_warnings": warnings,

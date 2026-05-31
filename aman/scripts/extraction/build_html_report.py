@@ -23,16 +23,16 @@ import html
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SUMMARY_PATH = ROOT / "data/llm_cache/sample/canvas_data.json"
-FULL_PATH = ROOT / "data/llm_cache/sample/canvas_full_data.json"
-OUT_PATH = ROOT / "data/extraction_sample_report.html"
+DEFAULT_SUMMARY_PATH = ROOT / "data/llm_cache/sample/canvas_data.json"
+DEFAULT_FULL_PATH = ROOT / "data/llm_cache/sample/canvas_full_data.json"
+DEFAULT_OUT_PATH = ROOT / "data/extraction_sample_report.html"
 
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Zomato Review Extraction — v2 sample (146 reviews)</title>
+<title>__REPORT_TITLE__</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root {
@@ -454,28 +454,21 @@ footer {
 <div class="container">
 
 <header>
-  <h1>Restaurant review extraction — 146-review v2 sample</h1>
-  <p class="subtitle">Gemini 2.5 Flash Lite · sync mode · temperature 0 · all 146 reviews stratified across rating, length, and source</p>
+  <h1>__REPORT_H1__</h1>
+  <p class="subtitle">__REPORT_SUBTITLE__</p>
 </header>
 
 <h2>Summary</h2>
 <div class="stat-grid">
   <div class="stat"><div class="value">__V2_TOTAL__</div><div class="label">Reviews extracted</div></div>
-  <div class="stat"><div class="value tone-success">__V2_WARN_RATE__%</div><div class="label">Warning rate (v1 was __V1_WARN_RATE__%)</div></div>
-  <div class="stat"><div class="value tone-success">__V2_API_ERR__</div><div class="label">API errors (v1 had __V1_API_ERR__)</div></div>
-  <div class="stat"><div class="value">$__V2_COST__</div><div class="label">v2 sync cost (sample)</div></div>
+  <div class="stat"><div class="value tone-success">__V2_WARN_RATE__%</div><div class="label">Warning rate (__BASELINE_NAME__ was __V1_WARN_RATE__%)</div></div>
+  <div class="stat"><div class="value tone-success">__V2_API_ERR__</div><div class="label">API errors (__BASELINE_NAME__ had __V1_API_ERR__)</div></div>
+  <div class="stat"><div class="value">$__V2_COST__</div><div class="label">__CURRENT_NAME__ sync cost (sample)</div></div>
 </div>
 
-<div class="callout">
-  <strong>Prompt iteration outcome.</strong> v2 dropped the warning rate from
-  __V1_WARN_RATE__% to __V2_WARN_RATE__% — a 63% reduction — and eliminated all 8 shape errors
-  (immune_flags-as-list, atmosphere-shape leak) plus all 6 transient 503 errors via retry. The
-  remaining warnings are mostly the model inventing fields like
-  <code>atmosphere.ambience</code> and stray enum choices like
-  <code>portion_size: "moderate"</code> — survivable, all extractions still usable.
-</div>
+__CALLOUT_HTML__
 
-<h2>Failure-mode breakdown · v1 vs v2</h2>
+<h2>Failure-mode breakdown · __BASELINE_NAME__ vs __CURRENT_NAME__</h2>
 <p class="muted">
   Counts of pydantic validation issues per category, across the 146 reviews.
   "Invented field" = the model added a key not in the schema (e.g. <code>ambiance_score</code>).
@@ -502,56 +495,10 @@ __COVERAGE_TABLE__
 
 <hr class="section-divider">
 
-<h2>Browse all 146 extractions</h2>
-<p class="muted">
-  Each row is one review. Use the filters and search to narrow down. Click
-  any row to expand and see the original review alongside the structured
-  extraction. Audit spans (the literal quotes the LLM grounded each field in)
-  are preserved verbatim where present.
-</p>
-
-<div class="filters">
-  <div class="filter-row" data-name="rating">
-    <span class="label">rating</span>
-    <button class="pill active" data-value="all">all</button>
-    <button class="pill" data-value="1">1★</button>
-    <button class="pill" data-value="2">2★</button>
-    <button class="pill" data-value="3">3★</button>
-    <button class="pill" data-value="4">4★</button>
-    <button class="pill" data-value="5">5★</button>
-  </div>
-  <div class="filter-row" data-name="source">
-    <span class="label">source</span>
-    <button class="pill active" data-value="all">all sources</button>
-    <button class="pill" data-value="reviews">reviews</button>
-    <button class="pill" data-value="rescrape">rescrape</button>
-  </div>
-  <div class="filter-row" data-name="content">
-    <span class="label">content</span>
-    <button class="pill active" data-value="all">all</button>
-    <button class="pill" data-value="with_extraction">with extraction</button>
-    <button class="pill" data-value="empty">empty {}</button>
-    <button class="pill" data-value="with_warnings">with warnings</button>
-  </div>
-  <div class="filter-row">
-    <span class="label">search</span>
-    <input type="search" id="search" placeholder="restaurant name or review text..." autocomplete="off">
-  </div>
-</div>
-
-<div class="counter-row">
-  Showing <strong id="count-showing">146</strong> / 146 ·
-  With extraction <strong id="count-ext">0</strong> ·
-  Empty {} <strong id="count-empty">0</strong> ·
-  With warnings <strong id="count-warn">0</strong>
-</div>
-
-<div id="review-list">
-__REVIEW_LIST__
-</div>
+__BROWSE_SECTION__
 
 <footer>
-  Generated on __GEN_DATE__ from <code>aman/data/llm_cache/sample/v2/sample_combined.json</code>.
+  Generated on __GEN_DATE__ from <code>__SOURCE_PATH__</code>.
   This is a static, self-contained HTML file — share it by emailing or uploading anywhere.
   All data is embedded inline; no network calls.
 </footer>
@@ -822,7 +769,7 @@ def render_review(rec: dict) -> str:
     )
 
 
-def render_failure_bars(v1_modes: dict, v2_modes: dict) -> str:
+def render_failure_bars(v1_modes: dict, v2_modes: dict, baseline_name: str, current_name: str) -> str:
     keys = sorted(set(list(v1_modes.keys()) + list(v2_modes.keys())))
     max_val = max(
         max(v1_modes.values(), default=0),
@@ -833,8 +780,8 @@ def render_failure_bars(v1_modes: dict, v2_modes: dict) -> str:
     rows.append(
         '<div class="bar-row" style="font-size:11px;color:var(--text-faint);">'
         '<div class="label">category</div>'
-        '<div>v1 (original prompt)</div>'
-        '<div>v2 (iterated prompt)</div>'
+        f'<div>{esc(baseline_name)}</div>'
+        f'<div>{esc(current_name)}</div>'
         '</div>'
     )
     for k in keys:
@@ -855,7 +802,7 @@ def render_failure_bars(v1_modes: dict, v2_modes: dict) -> str:
     return "\n".join(rows)
 
 
-def render_coverage_table(v1_cov: dict, v2_cov: dict, v1_n: int, v2_n: int) -> str:
+def render_coverage_table(v1_cov: dict, v2_cov: dict, v1_n: int, v2_n: int, baseline_name: str, current_name: str) -> str:
     sections = sorted(set(list(v1_cov.keys()) + list(v2_cov.keys())),
                       key=lambda s: -v2_cov.get(s, 0))
     rows = []
@@ -877,54 +824,156 @@ def render_coverage_table(v1_cov: dict, v2_cov: dict, v1_n: int, v2_n: int) -> s
     return (
         "<table>"
         "<thead><tr>"
-        "<th>Section</th><th style='text-align:right;'>v1</th>"
-        "<th style='text-align:right;'>v2</th><th style='text-align:right;'>Δ</th>"
+        f"<th>Section</th><th style='text-align:right;'>{esc(baseline_name)}</th>"
+        f"<th style='text-align:right;'>{esc(current_name)}</th><th style='text-align:right;'>Δ</th>"
         "</tr></thead>"
         "<tbody>" + "\n".join(rows) + "</tbody></table>"
     )
 
 
-def main():
-    with open(SUMMARY_PATH) as f:
-        summary = json.load(f)
-    with open(FULL_PATH) as f:
-        records = json.load(f)
+BROWSE_SECTION_HTML = """
+<h2>Browse all 146 extractions</h2>
+<p class="muted">
+  Each row is one review. Use the filters and search to narrow down. Click
+  any row to expand and see the original review alongside the structured
+  extraction. Audit spans (the literal quotes the LLM grounded each field in)
+  are preserved verbatim where present.
+</p>
 
+<div class="filters">
+  <div class="filter-row" data-name="rating">
+    <span class="label">rating</span>
+    <button class="pill active" data-value="all">all</button>
+    <button class="pill" data-value="1">1★</button>
+    <button class="pill" data-value="2">2★</button>
+    <button class="pill" data-value="3">3★</button>
+    <button class="pill" data-value="4">4★</button>
+    <button class="pill" data-value="5">5★</button>
+  </div>
+  <div class="filter-row" data-name="source">
+    <span class="label">source</span>
+    <button class="pill active" data-value="all">all sources</button>
+    <button class="pill" data-value="reviews">reviews</button>
+    <button class="pill" data-value="rescrape">rescrape</button>
+  </div>
+  <div class="filter-row" data-name="content">
+    <span class="label">content</span>
+    <button class="pill active" data-value="all">all</button>
+    <button class="pill" data-value="with_extraction">with extraction</button>
+    <button class="pill" data-value="empty">empty {}</button>
+    <button class="pill" data-value="with_warnings">with warnings</button>
+  </div>
+  <div class="filter-row">
+    <span class="label">search</span>
+    <input type="search" id="search" placeholder="restaurant name or review text..." autocomplete="off">
+  </div>
+</div>
+
+<div class="counter-row">
+  Showing <strong id="count-showing">146</strong> / 146 ·
+  With extraction <strong id="count-ext">0</strong> ·
+  Empty {} <strong id="count-empty">0</strong> ·
+  With warnings <strong id="count-warn">0</strong>
+</div>
+
+<div id="review-list">
+__REVIEW_LIST__
+</div>
+"""
+
+
+def main():
+    import argparse
+    import datetime
+
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--summary", type=Path, default=DEFAULT_SUMMARY_PATH)
+    p.add_argument("--full", type=Path, default=DEFAULT_FULL_PATH)
+    p.add_argument("--out", type=Path, default=DEFAULT_OUT_PATH)
+    p.add_argument("--title", default="Zomato Review Extraction — sample report")
+    p.add_argument("--h1", default="Restaurant review extraction — 146-review sample")
+    p.add_argument(
+        "--subtitle",
+        default=(
+            "Gemini 2.5 Flash Lite · sync mode · temperature 0 · "
+            "146 reviews stratified across rating, length, and source"
+        ),
+    )
+    p.add_argument("--callout", default="", help="HTML callout paragraph (optional)")
+    p.add_argument("--source-path", default="", help="Footer source path label")
+    p.add_argument("--no-browse", action="store_true", help="Omit browse section")
+    args = p.parse_args()
+
+    with open(args.summary) as f:
+        summary = json.load(f)
+
+    baseline_name = summary.get("baseline_label", "baseline")
+    current_name = summary.get("current_label", "current")
     v1 = summary["v1"]
     v2 = summary["v2"]
 
+    records = []
+    if not args.no_browse and args.full.exists():
+        with open(args.full) as f:
+            records = json.load(f)
+
     review_html = "\n".join(render_review(r) for r in records)
-    failure_bars = render_failure_bars(v1["failure_modes"], v2["failure_modes"])
+    failure_bars = render_failure_bars(
+        v1["failure_modes"], v2["failure_modes"], baseline_name, current_name
+    )
     coverage = render_coverage_table(
-        v1["section_coverage"], v2["section_coverage"],
-        v1["with_extraction"], v2["with_extraction"],
+        v1["section_coverage"],
+        v2["section_coverage"],
+        v1["with_extraction"],
+        v2["with_extraction"],
+        baseline_name,
+        current_name,
     )
 
-    import datetime
+    if args.callout:
+        callout_html = f'<div class="callout">{args.callout}</div>'
+    else:
+        callout_html = ""
+
+    browse_section = ""
+    if not args.no_browse:
+        browse_section = BROWSE_SECTION_HTML.replace("__REVIEW_LIST__", review_html)
+
+    source_path = args.source_path or str(
+        args.full.relative_to(ROOT) if args.full.is_relative_to(ROOT) else args.full
+    )
+
     out = HTML_TEMPLATE
     repls = {
+        "__REPORT_TITLE__": esc(args.title),
+        "__REPORT_H1__": esc(args.h1),
+        "__REPORT_SUBTITLE__": esc(args.subtitle),
+        "__BASELINE_NAME__": esc(baseline_name),
+        "__CURRENT_NAME__": esc(current_name),
         "__V2_TOTAL__": str(v2["total"]),
         "__V2_WARN_RATE__": f"{v2['warning_rate_pct']:.1f}",
         "__V1_WARN_RATE__": f"{v1['warning_rate_pct']:.1f}",
         "__V2_API_ERR__": str(v2["api_errors"]),
         "__V1_API_ERR__": str(v1["api_errors"]),
         "__V2_COST__": f"{v2['total_cost_usd']:.4f}",
+        "__CALLOUT_HTML__": callout_html,
         "__FAILURE_BARS__": failure_bars,
         "__COVERAGE_TABLE__": coverage,
         "__P_SYNC__": f"{int(summary['projection_sync_usd']):,}",
         "__P_BATCH__": f"{int(summary['projection_batch_usd']):,}",
         "__P_CACHED__": f"{int(summary['projection_batch_cached_usd']):,}",
         "__N_CORPUS__": f"{summary['n_reviews_total_corpus']:,}",
-        "__REVIEW_LIST__": review_html,
+        "__BROWSE_SECTION__": browse_section,
         "__GEN_DATE__": datetime.date.today().isoformat(),
+        "__SOURCE_PATH__": esc(source_path),
     }
     for k, v in repls.items():
         out = out.replace(k, v)
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(out, encoding="utf-8")
-    size_kb = OUT_PATH.stat().st_size / 1024
-    print(f"Wrote {OUT_PATH} ({size_kb:.1f} KB, {len(records)} reviews)")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(out, encoding="utf-8")
+    size_kb = args.out.stat().st_size / 1024
+    print(f"Wrote {args.out} ({size_kb:.1f} KB, {len(records)} reviews in browse)")
 
 
 if __name__ == "__main__":

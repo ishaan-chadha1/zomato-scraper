@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""Generate compact per-review records for the all-reviews canvas.
-
-Strips null fields and `description == None` placeholders so the
-embedded JSON is as small as possible while still showing the user
-exactly what each review produced.
-"""
+"""Generate compact per-review records for HTML report browse section."""
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -29,7 +25,16 @@ def strip_nulls(obj):
 
 
 def main():
-    src = ROOT / "data/llm_cache/sample/v2/sample_combined.json"
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--label", default="v2.2", help="Sample run label subdirectory")
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=ROOT / "data/llm_cache/sample/canvas_full_data.json",
+    )
+    args = p.parse_args()
+
+    src = ROOT / f"data/llm_cache/sample/{args.label}/sample_combined.json"
     with open(src) as f:
         records = json.load(f)
 
@@ -55,11 +60,11 @@ def main():
             }
         )
 
-    out_path = ROOT / "data/llm_cache/sample/canvas_full_data.json"
-    with open(out_path, "w") as f:
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with open(args.out, "w") as f:
         json.dump(compact, f, ensure_ascii=False, separators=(",", ":"))
-    size_kb = out_path.stat().st_size / 1024
-    print(f"Wrote {out_path} ({size_kb:.1f} KB, {len(compact)} records)")
+    size_kb = args.out.stat().st_size / 1024
+    print(f"Wrote {args.out} ({size_kb:.1f} KB, {len(compact)} records)")
 
 
 if __name__ == "__main__":

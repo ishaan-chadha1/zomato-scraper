@@ -33,6 +33,7 @@ def build_schema_spec() -> str:
     """
 
     sections: list[tuple[str, type[Any]]] = [
+        ("reviewer_signal", S.ReviewerSignal),
         ("context", S.Context),
         ("atmosphere", S.Atmosphere),
         ("service", S.Service),
@@ -52,8 +53,10 @@ def build_schema_spec() -> str:
     out: list[str] = []
     out.append("# SCHEMA — top-level keys (all optional, omit any you cannot fill):")
     out.append(
-        "context, atmosphere, service, value, dishes (list), occasion_fit,\n"
-        "immune_flags, resonance, memory, dietary, cuisine, practical, bar, entertainment"
+        "schema_version, t2_triggers_fired, cross_dish_consistency_signal,\n"
+        "reviewer_signal, context, atmosphere, service, value, dishes (list),\n"
+        "occasion_fit, immune_flags, resonance, memory, dietary, cuisine,\n"
+        "practical, bar, entertainment"
     )
     out.append("")
 
@@ -186,6 +189,71 @@ failure mode we have observed. Treat them as absolute.
       NEVER emit it as a list:
         WRONG: "immune_flags": [{"rude_staff": {...}}, {...}]
         RIGHT: "immune_flags": {"rude_staff": {...}, "hidden_charges": {...}}
+
+  R7. HIGH-ROI SECTIONS — DO NOT SKIP WHEN SIGNAL EXISTS.
+      These sections regressed in prior prompt versions. Actively attempt them:
+        - occasion_fit: If the review mentions friends, date, family, kids, solo,
+          birthday, business, party, quick bite, drinks, or any visit context,
+          emit at least one of good_for / bad_for / specifically_not using the
+          fixed enum values. Infer from context clues — do not wait for the
+          phrase "good for".
+        - resonance: If the review has ANY emotional tone, recommendation, or
+          surprise language, emit narrative_arc AND/OR recommendation_strength
+          AND/OR primary_memory_anchor. Short reviews still count.
+        - value: If price, cost, expensive, cheap, worth, bill, or portion is
+          mentioned, emit at least one value field (price_perception, value_signal,
+          quality_to_price, portion_size, or pricing_transparency).
+
+  R8. VALUE — HIGHEST PRIORITY after occasion/resonance.
+      Emit a `value` section whenever ANY of these appear: price, expensive,
+      cheap, costly, affordable, worth, value, bill, overpriced, money,
+      rupees, ₹, portion, quantity, quantity-for-money, pocket, budget.
+      Pick the closest field:
+        - price_perception (underpriced / fair / premium_justified / overpriced)
+        - value_signal (great_value / fair_value / poor_value)
+        - quality_to_price (exceeds / matches / undershoots)
+        - portion_size (too_small / small / adequate / generous)
+        - pricing_transparency (clear / unclear / hidden_charges)
+      Do NOT skip value because food or service were also discussed.
+
+  R9. ENUM ALIASES — map to schema exactly, never invent synonyms:
+        - entertainment.live_music: `dj` not live_dj; `band` not live_band
+        - context.visit_type: first_visit | repeat_visit | regular_haunt ONLY.
+          `one_time_visitor` belongs in reviewer_signal.reviewer_type.
+        - service.staff_friendliness: `polite` or `warm` — NOT friendly,
+          courteous, or professional.
+        - atmosphere.decor_character: `minimal` not minimalist.
+        - dishes[].portion (NOT portion_size); value.portion_size for price section.
+        - cuisine.cuisine_specialization_clarity holds extensive_but_coherent,
+          NOT menu_breadth.
+        - bar.alcohol_identity_signal: omit entirely if no bar/alcohol identity
+          signal — never emit `none`.
+        - cross_dish_consistency_signal: ONLY when the user message lists it
+          under T2 triggers fired.
+
+  R10. NEVER emit invented fields: ambience, ambiance, ambience_quality,
+       ambience_score, seating_score, staff_rating, food_quality_score,
+       or any top-level dish_function (put dish_function inside dishes[]).
+
+# REVIEWER SIGNAL (Section 2 — always attempt)
+
+Extract reviewer_signal on every non-empty review:
+  - review_effort_signal: classify review depth (high_effort_structured,
+    medium_effort, low_effort_emotional_ENGAGED, low_effort_emotional_DISMISSIVE,
+    one_liner). ENGAGED = short but names a specific dish/attribute/emotion.
+    DISMISSIVE = generic praise only ("Great place!", "Must visit").
+  - reviewer_type: connoisseur / enthusiast / casual_diner / influencer_style /
+    one_time_visitor — from writing style and specificity.
+  - reviewer_spend_sensitivity: from price language if any.
+  - review_authenticity_signal: likely_genuine vs performative hyperbole.
+  - social_performance_signal: audience_written (showing off) vs self_record.
+
+If the user message lists T2 triggers that fired, extract ONLY those T2 fields
+(in addition to all T1 fields). Do not extract T2 fields whose triggers did
+not fire. T2 examples: social_override_signal, delayed_dissatisfaction_signal,
+satisfaction_attribution, emotional_aftertaste, alcohol_consumed_this_visit.
+
+Always set schema_version to "v3.0".
 
 # THE PRIMARY RULE
 
@@ -344,16 +412,40 @@ commentary, no markdown fences. Omit any field you cannot extract.
 SYSTEM_INSTRUCTION = SYSTEM_INSTRUCTION_BASE + "\n\n" + SCHEMA_SPEC
 
 
-def build_user_prompt(review_text: str, rating: float | None, restaurant: str) -> str:
+def build_user_prompt(
+    review_text: str,
+    rating: float | None,
+    restaurant: str,
+    *,
+    t2_triggers: list[str] | None = None,
+    review_effort_signal: str | None = None,
+) -> str:
     """Build the per-review user message."""
 
     rating_str = f"{rating:g}" if rating is not None else "unknown"
-    return (
-        f"Restaurant: {restaurant}\n"
-        f"Star rating given by reviewer: {rating_str}/5\n"
-        f"\n"
-        f"Review text:\n"
-        f"<<<\n{review_text}\n>>>\n"
-        f"\n"
-        f"Extract structured attributes per the schema."
+    parts = [
+        f"Restaurant: {restaurant}",
+        f"Star rating given by reviewer: {rating_str}/5",
+    ]
+    if review_effort_signal:
+        parts.append(
+            f"Python pre-classified review_effort_signal: {review_effort_signal} "
+            f"(use this value in reviewer_signal.review_effort_signal unless clearly wrong)"
+        )
+    if t2_triggers:
+        parts.append(
+            "T2 keyword triggers fired (extract these T2 fields if supported by text): "
+            + ", ".join(t2_triggers)
+        )
+    else:
+        parts.append("T2 keyword triggers fired: none")
+    parts.extend(
+        [
+            "",
+            "Review text:",
+            f"<<<\n{review_text}\n>>>",
+            "",
+            "Extract structured attributes per the schema.",
+        ]
     )
+    return "\n".join(parts)

@@ -35,6 +35,75 @@ class Severity(str, Enum):
 
 
 # ---------------------------------------------------------------------------
+# 0. REVIEWER SIGNAL (Layer 2 purification — master weight multiplier)
+# ---------------------------------------------------------------------------
+
+
+class ReviewEffortSignal(str, Enum):
+    high_effort_structured = "high_effort_structured"
+    medium_effort = "medium_effort"
+    low_effort_emotional_ENGAGED = "low_effort_emotional_ENGAGED"
+    low_effort_emotional_DISMISSIVE = "low_effort_emotional_DISMISSIVE"
+    one_liner = "one_liner"
+
+
+class ReviewerType(str, Enum):
+    connoisseur = "connoisseur"
+    enthusiast = "enthusiast"
+    casual_diner = "casual_diner"
+    influencer_style = "influencer_style"
+    one_time_visitor = "one_time_visitor"
+
+
+class ReviewerSpendSensitivity(str, Enum):
+    price_insensitive = "price_insensitive"
+    value_conscious = "value_conscious"
+    price_sensitive = "price_sensitive"
+    not_determinable = "not_determinable"
+
+
+class ReviewAuthenticitySignal(str, Enum):
+    likely_genuine = "likely_genuine"
+    possibly_performative = "possibly_performative"
+    likely_performative = "likely_performative"
+
+
+class SocialPerformanceSignal(str, Enum):
+    audience_written = "audience_written"
+    self_record = "self_record"
+    ambiguous = "ambiguous"
+
+
+class ReviewLanguage(str, Enum):
+    english_formal = "english_formal"
+    english_casual = "english_casual"
+    hinglish = "hinglish"
+    kannada_mixed = "kannada_mixed"
+    hindi_mixed = "hindi_mixed"
+    tamil_mixed = "tamil_mixed"
+    transliterated = "transliterated"
+
+
+class StatedVsObservedGap(str, Enum):
+    gap_detected = "gap_detected"
+    consistent = "consistent"
+    insufficient_data = "insufficient_data"
+
+
+class ReviewerSignal(BaseModel):
+    """Reviewer purification layer — weight multipliers applied downstream in Python."""
+
+    review_effort_signal: Optional[ReviewEffortSignal] = None
+    reviewer_type: Optional[ReviewerType] = None
+    reviewer_spend_sensitivity: Optional[ReviewerSpendSensitivity] = None
+    review_authenticity_signal: Optional[ReviewAuthenticitySignal] = None
+    social_performance_signal: Optional[SocialPerformanceSignal] = None
+    review_language: Optional[ReviewLanguage] = None
+    stated_vs_observed_gap: Optional[StatedVsObservedGap] = None
+    span: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # 1. CONTEXT
 # ---------------------------------------------------------------------------
 
@@ -129,12 +198,33 @@ class TimePressure(str, Enum):
 
 
 class ArrivalState(str, Enum):
+    exhausted = "exhausted"
     celebratory = "celebratory"
+    lonely = "lonely"
+    romantic_mood = "romantic_mood"
+    reward_seeking = "reward_seeking"
+    ambitious_signaling = "ambitious_signaling"
+    decompression = "decompression"
+    post_conflict_recovery = "post_conflict_recovery"
     casual = "casual"
     stressed = "stressed"
     very_hungry = "very_hungry"
     tired = "tired"
     excited = "excited"
+
+
+class AlcoholConsumed(str, Enum):
+    yes_mentioned = "yes_mentioned"
+    likely_yes = "likely_yes"
+    no_mentioned = "no_mentioned"
+    likely_no = "likely_no"
+
+
+class OrderingRiskTolerance(str, Enum):
+    conservative_familiar = "conservative_familiar"
+    moderate = "moderate"
+    exploratory = "exploratory"
+    very_adventurous = "very_adventurous"
 
 
 class SeasonWeather(str, Enum):
@@ -155,6 +245,8 @@ class Context(BaseModel):
     duration_of_visit: Optional[DurationOfVisit] = None
     time_pressure: Optional[TimePressure] = None
     arrival_state: Optional[ArrivalState] = None
+    alcohol_consumed_this_visit: Optional[AlcoholConsumed] = None
+    ordering_risk_tolerance: Optional[OrderingRiskTolerance] = None
     season_weather: Optional[SeasonWeather] = None
     span: Optional[str] = None
 
@@ -654,6 +746,22 @@ class ConsistencyMention(str, Enum):
     declining = "declining"
 
 
+class DishFunction(str, Enum):
+    comfort = "comfort"
+    identity_signal = "identity_signal"
+    novelty_seek = "novelty_seek"
+    nostalgia = "nostalgia"
+    social_share = "social_share"
+    practical_fuel = "practical_fuel"
+
+
+class CrossDishConsistency(str, Enum):
+    consistent_across_dishes = "consistent_across_dishes"
+    one_hero_rest_weak = "one_hero_rest_weak"
+    mixed_performance = "mixed_performance"
+    all_weak = "all_weak"
+
+
 class Dish(BaseModel):
     name: str = Field(..., description="Lowercased dish name, e.g. 'butter chicken'")
     category: Optional[DishCategory] = None
@@ -668,6 +776,11 @@ class Dish(BaseModel):
             "charred, zingy, umami, fermented, crispy, soft"
         ),
     )
+    texture_descriptors: Optional[list[str]] = Field(
+        default=None,
+        description="crispy, soft, layered, dense, chewy, silky, grainy, melty",
+    )
+    dish_function: Optional[DishFunction] = None
     portion: Optional[DishPortion] = None
     presentation: Optional[DishPresentation] = None
     temperature_served: Optional[TempServed] = None
@@ -780,6 +893,61 @@ class WouldRevisitWhen(str, Enum):
     never = "never"
 
 
+class PrimaryMemoryAnchor(str, Enum):
+    food_taste = "food_taste"
+    specific_dish = "specific_dish"
+    ambience_visual = "ambience_visual"
+    social_moment = "social_moment"
+    service_interaction = "service_interaction"
+    value_surprise = "value_surprise"
+    mixed = "mixed"
+    none_lingered = "none_lingered"
+
+
+class SocialOverrideSignal(str, Enum):
+    likely_present = "likely_present"
+    absent = "absent"
+
+
+class DelayedDissatisfactionSignal(str, Enum):
+    present = "present"
+    absent = "absent"
+
+
+class SatisfactionAttribution(str, Enum):
+    food_primary = "food_primary"
+    ambience_primary = "ambience_primary"
+    company_primary_SOLE = "company_primary_SOLE"
+    company_primary_PARTIAL = "company_primary_PARTIAL"
+    value_primary = "value_primary"
+    mixed = "mixed"
+    unattributed = "unattributed"
+
+
+class EmotionalAftertaste(str, Enum):
+    emotionally_warm = "emotionally_warm"
+    calm = "calm"
+    energized = "energized"
+    exhausted = "exhausted"
+    regret = "regret"
+    heavy = "heavy"
+    socially_validated = "socially_validated"
+
+
+class RecoveryQuality(str, Enum):
+    restorative = "restorative"
+    neutral = "neutral"
+    draining = "draining"
+
+
+class RegretCurveType(str, Enum):
+    no_regret = "no_regret"
+    immediate_regret = "immediate_regret"
+    delayed_regret = "delayed_regret"
+    slow_burn_appreciation = "slow_burn_appreciation"
+    decision_regret = "decision_regret"
+
+
 class Resonance(BaseModel):
     """Distinguishes genuine emotional residue (resonance) from
     identity performance (performance markers). Real signal lives in
@@ -802,6 +970,13 @@ class Resonance(BaseModel):
         ),
     )
     emotional_lingering: Optional[bool] = None
+    primary_memory_anchor: Optional[PrimaryMemoryAnchor] = None
+    social_override_signal: Optional[SocialOverrideSignal] = None
+    delayed_dissatisfaction_signal: Optional[DelayedDissatisfactionSignal] = None
+    satisfaction_attribution: Optional[SatisfactionAttribution] = None
+    emotional_aftertaste: Optional[EmotionalAftertaste] = None
+    recovery_quality: Optional[RecoveryQuality] = None
+    regret_curve_type: Optional[RegretCurveType] = None
     expectations_vs_reality: Optional[ExpectationsVsReality] = None
     narrative_arc: Optional[NarrativeArc] = None
     comparison_made: Optional[list[str]] = Field(
@@ -910,13 +1085,12 @@ class Dietary(BaseModel):
     vegetarian_signal: Optional[VegetarianSignal] = None
     vegan_signal: Optional[VeganSignal] = None
     jain_friendly: Optional[TriState] = None
-    egg_eaters_only: Optional[bool] = None
-    gluten_free_options: Optional[StrengthLevel] = None
-    keto_friendly: Optional[StrengthLevel] = None
     halal_status: Optional[HalalStatus] = None
     alcohol_served: Optional[AlcoholServed] = None
-    non_alcoholic_options_quality: Optional[QualityLevel] = None
-    health_conscious_options: Optional[StrengthLevel] = None
+    non_alcoholic_options: Optional[QualityLevel] = Field(
+        default=None,
+        description="T3 sparse — excellent, standard, none",
+    )
     allergen_awareness: Optional[AwarenessLevel] = None
     span: Optional[str] = None
 
@@ -1050,81 +1224,40 @@ class PhotoPolicy(str, Enum):
 
 
 class Practical(BaseModel):
-    reservation_required: Optional[ReservationRequired] = None
-    reservation_ease: Optional[ReservationEase] = None
-    wait_during_peak: Optional[WaitDuringPeak] = None
-    parking_availability: Optional[ParkingAvailability] = None
+    """Collapsed practical section (v3 — 6 core fields)."""
+
     payment_methods: Optional[list[PaymentMethod]] = None
-    wifi_quality: Optional[WifiQuality] = None
+    reservation_required: Optional[ReservationRequired] = None
+    parking_availability: Optional[ParkingAvailability] = None
     solo_diner_comfortable: Optional[bool] = None
-    phone_signal_inside: Optional[PhoneSignalInside] = None
+    wait_during_peak: Optional[WaitDuringPeak] = None
     child_facilities: Optional[list[ChildFacility]] = None
-    pet_policy: Optional[PetPolicy] = None
-    dress_code: Optional[DressCode] = None
-    photo_policy: Optional[PhotoPolicy] = None
-    loyalty_program_mentioned: Optional[bool] = None
     span: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
-# 13. BAR (only if drinks served)
+# 13. BAR / ALCOHOL IDENTITY (collapsed v3 — 2 fields)
 # ---------------------------------------------------------------------------
 
 
-class BarQuality(str, Enum):
+class AlcoholIdentitySignal(str, Enum):
+    mass = "mass"
+    premium = "premium"
+    connoisseur = "connoisseur"
+    nightlife_heavy = "nightlife_heavy"
+    networking_heavy = "networking_heavy"
+
+
+class BarQualitySignal(str, Enum):
     excellent = "excellent"
     good = "good"
     poor = "poor"
-    no_bar = "no_bar"
-
-
-class ProgramLevel(str, Enum):
-    innovative = "innovative"
-    standard = "standard"
-    poor = "poor"
     none = "none"
-
-
-class SelectionLevel(str, Enum):
-    extensive = "extensive"
-    standard = "standard"
-    limited = "limited"
-    none = "none"
-
-
-class BeerSelection(str, Enum):
-    craft_extensive = "craft_extensive"
-    standard = "standard"
-    limited = "limited"
-    none = "none"
-
-
-class CocktailPricing(str, Enum):
-    fair = "fair"
-    premium = "premium"
-    overpriced = "overpriced"
-
-
-class BartenderSkill(str, Enum):
-    excellent = "excellent"
-    competent = "competent"
-    poor = "poor"
-
-
-class HappyHourQuality(str, Enum):
-    worth_it = "worth_it"
-    standard = "standard"
 
 
 class Bar(BaseModel):
-    bar_quality: Optional[BarQuality] = None
-    cocktail_program: Optional[ProgramLevel] = None
-    wine_program: Optional[SelectionLevel] = None
-    whisky_selection: Optional[SelectionLevel] = None
-    beer_selection: Optional[BeerSelection] = None
-    cocktail_pricing: Optional[CocktailPricing] = None
-    bartender_skill: Optional[BartenderSkill] = None
-    happy_hour_quality: Optional[HappyHourQuality] = None
+    alcohol_identity_signal: Optional[AlcoholIdentitySignal] = None
+    bar_quality_signal: Optional[BarQualitySignal] = None
     span: Optional[str] = None
 
 
@@ -1192,6 +1325,16 @@ class ReviewExtraction(BaseModel):
     from the review).
     """
 
+    schema_version: Optional[str] = Field(
+        default="v3.0",
+        description="ARC extraction schema version for corpus comparability.",
+    )
+    t2_triggers_fired: Optional[list[str]] = Field(
+        default=None,
+        description="Python-detected T2 keyword triggers for this review.",
+    )
+    cross_dish_consistency_signal: Optional[CrossDishConsistency] = None
+    reviewer_signal: Optional[ReviewerSignal] = None
     context: Optional[Context] = None
     atmosphere: Optional[Atmosphere] = None
     service: Optional[Service] = None
