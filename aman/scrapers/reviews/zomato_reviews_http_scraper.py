@@ -16,7 +16,7 @@ Example::
 
     python3 zomato_reviews_http.py \\
       --url "https://www.zomato.com/bangalore/meghana-foods-marathahalli-bangalore" \\
-      --sort new --filters reviews-dining --progress
+      --sort new --progress
 """
 
 from __future__ import annotations
@@ -42,7 +42,8 @@ HEADERS = {
 }
 
 SORT_QUERY = {"popular": "rd", "new": "dd"}
-DEFAULT_FILTERS = ("reviews-dining", "reviews-delivery")
+# Dine-in / on-premise reviews only (delivery is a separate filter; add it via --filters if needed).
+DEFAULT_FILTERS = ("reviews-dining",)
 # Oversized page= is clamped by Zomato; state then exposes the real last page index.
 PROBE_PAGE_FOR_PAGE_COUNT = 1007
 
@@ -252,6 +253,10 @@ def _normalize_restaurant_base_url(url: str) -> str:
     u = url.strip().split("#")[0].split("?")[0].rstrip("/")
     if u.endswith("/reviews"):
         u = u[: -len("/reviews")]
+    # Listing / commerce suffixes: reviews live on the restaurant base path, not under these.
+    for suffix in ("/info", "/order"):
+        if u.endswith(suffix):
+            u = u[: -len(suffix)]
     return u
 
 
@@ -263,10 +268,10 @@ def _reviews_listing_url(base: str, page: int, sort_code: str, review_filter: st
     return f"{base}/reviews?{q}"
 
 
-def save_df(file_name: str, df: pd.DataFrame) -> None:
-    os.makedirs("Reviews", exist_ok=True)
+def save_df(file_name: str, df: pd.DataFrame, output_dir: str = "Reviews") -> None:
+    os.makedirs(output_dir, exist_ok=True)
     safe = re.sub(r'[<>:"/\\|?*]', "", file_name).strip() or "Unknown Restaurant"
-    path = os.path.join("Reviews", f"{safe}.csv")
+    path = os.path.join(output_dir, f"{safe}.csv")
     df.to_csv(path, index=False)
     print(f"Wrote {path}", flush=True)
 
@@ -303,6 +308,7 @@ def get_reviews(
     sort: str = "popular",
     save: bool = True,
     save_empty: bool = False,
+    save_dir: str = "Reviews",
     filters: tuple[str, ...] | None = None,
     safety_max_pages: int = 5000,
     delay_sec: float = 0.25,
@@ -425,7 +431,7 @@ def get_reviews(
     restaurant_name = sanitize_file_name(restaurant_name, fallback=fallback_name)
 
     if save and (save_empty or not review_df.empty):
-        save_df(restaurant_name, review_df)
+        save_df(restaurant_name, review_df, output_dir=save_dir)
     elif save and review_df.empty:
         print(f"[reviews] No reviews found for: {restaurant_name}", flush=True)
 
@@ -441,7 +447,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--filters",
         nargs="*",
         default=list(DEFAULT_FILTERS),
-        help="Zomato filter query values (default: reviews-dining reviews-delivery)",
+        help="Zomato filter query values (default: reviews-dining only). "
+        "Add e.g. reviews-delivery for delivery reviews.",
     )
     p.add_argument(
         "--max-pages",
@@ -457,6 +464,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--delay", type=float, default=0.25, help="Seconds between page requests")
     p.add_argument("--no-save", action="store_true", help="Do not write CSV under Reviews/")
+    p.add_argument(
+        "--output-dir",
+        default="Reviews",
+        help="Directory for saved CSV files (default: Reviews)",
+    )
     p.add_argument("--progress", action="store_true", help="Log each page to stdout")
     return p
 
@@ -470,6 +482,7 @@ def main() -> int:
             max_reviews=args.max_reviews,
             sort=args.sort,
             save=not args.no_save,
+            save_dir=args.output_dir,
             filters=flt,
             safety_max_pages=args.safety_max_pages,
             delay_sec=args.delay,
